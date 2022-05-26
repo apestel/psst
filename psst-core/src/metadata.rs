@@ -3,6 +3,7 @@ use std::time::Duration;
 use quick_protobuf::MessageRead;
 
 use crate::{
+    downloader,
     error::Error,
     item_id::{FileId, ItemId, ItemIdType},
     player::file::{MediaFile, MediaPath},
@@ -33,6 +34,10 @@ pub trait ToMediaPath {
     fn is_restricted_in_region(&self, country: &str) -> bool;
     fn find_allowed_alternative(&self, country: &str) -> Option<ItemId>;
     fn to_media_path(&self, preferred_bitrate: usize) -> Option<MediaPath>;
+    fn to_downloader_media_path(
+        &self,
+        preferred_bitrate: usize,
+    ) -> Option<downloader::file::MediaPath>;
 }
 
 impl ToMediaPath for Track {
@@ -59,6 +64,19 @@ impl ToMediaPath for Track {
             duration: Duration::from_millis(self.duration? as u64),
         })
     }
+
+    fn to_downloader_media_path(
+        &self,
+        preferred_bitrate: usize,
+    ) -> Option<downloader::file::MediaPath> {
+        let file = select_preferred_file(&self.file, preferred_bitrate)?;
+        Some(downloader::file::MediaPath {
+            item_id: ItemId::from_raw(self.gid.as_ref()?, ItemIdType::Track)?,
+            file_id: FileId::from_raw(file.file_id.as_ref()?)?,
+            file_format: file.format?,
+            duration: Duration::from_millis(self.duration? as u64),
+        })
+    }
 }
 
 impl ToMediaPath for Episode {
@@ -75,6 +93,19 @@ impl ToMediaPath for Episode {
     fn to_media_path(&self, preferred_bitrate: usize) -> Option<MediaPath> {
         let file = select_preferred_file(&self.file, preferred_bitrate)?;
         Some(MediaPath {
+            item_id: ItemId::from_raw(self.gid.as_ref()?, ItemIdType::Podcast)?,
+            file_id: FileId::from_raw(file.file_id.as_ref()?)?,
+            file_format: file.format?,
+            duration: Duration::from_millis(self.duration? as u64),
+        })
+    }
+
+    fn to_downloader_media_path(
+        &self,
+        preferred_bitrate: usize,
+    ) -> Option<downloader::file::MediaPath> {
+        let file = select_preferred_file(&self.file, preferred_bitrate)?;
+        Some(downloader::file::MediaPath {
             item_id: ItemId::from_raw(self.gid.as_ref()?, ItemIdType::Podcast)?,
             file_id: FileId::from_raw(file.file_id.as_ref()?)?,
             file_format: file.format?,

@@ -113,6 +113,7 @@ impl AudioDecoder {
             let packet = match self.format.next_packet() {
                 Ok(packet) => packet,
                 Err(SymphoniaError::IoError(io)) if io.kind() == io::ErrorKind::UnexpectedEof => {
+                    log::error!("End of Stream error");
                     return None; // End of this stream.
                 }
                 Err(err) => {
@@ -128,10 +129,13 @@ impl AudioDecoder {
             if packet.track_id() != self.track_id {
                 continue;
             }
+            log::debug!("Copying samples {:?}", packet.dur());
+
             // Decode the packet into an audio buffer.
             match self.decoder.decode(&packet) {
                 Ok(decoded) => {
                     // Interleave the samples into the buffer.
+                    log::debug!("Copying samples {:?}", packet.track_id());
                     samples.copy_interleaved_ref(decoded);
                     return Some(packet.ts());
                 }

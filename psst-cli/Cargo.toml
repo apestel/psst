@@ -9,3 +9,5 @@ psst-core = { path = "../psst-core" }
 
 env_logger = "0.8"
 log = "0.4"
+symphonia = { version = "0.5.0", default-features = false, features = ["ogg", "vorbis", "mp3"]}
+
