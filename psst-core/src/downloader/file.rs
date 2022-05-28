@@ -22,7 +22,7 @@ use crate::{
     util::OffsetFile,
 };
 
-use super::storage::{StreamRequest, StreamStorage, StreamWriter};
+use super::storage::{StreamReader, StreamRequest, StreamStorage, StreamWriter};
 
 #[derive(Debug, Clone, Copy)]
 pub struct MediaPath {
@@ -113,6 +113,16 @@ impl MediaFile {
             Self::Streamed { streamed_file, .. } => &streamed_file.storage,
             Self::Cached { cached_file, .. } => &cached_file.storage,
         }
+    }
+
+    pub fn decrypted_source(
+        &self,
+        key: AudioKey,
+    ) -> Result<(OffsetFile<AudioDecrypt<StreamReader>>), Error> {
+        let reader = self.storage().reader()?;
+        let mut decrypted = AudioDecrypt::new(key, reader);
+        let normalization = NormalizationData::parse(&mut decrypted)?;
+        Ok(OffsetFile::new(decrypted, self.header_length())?)
     }
 
     pub fn audio_source(&self, key: AudioKey) -> Result<(AudioDecoder, NormalizationData), Error> {

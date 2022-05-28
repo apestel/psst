@@ -1,3 +1,7 @@
+use std::fs::File;
+use std::io::{self, Read, Write};
+use std::path::Path;
+
 use crate::{
     audio::{decode::AudioDecoder, decrypt::AudioKey, normalize::NormalizationLevel},
     cache::CacheHandle,
@@ -27,23 +31,35 @@ pub struct PlaybackItem {
 }
 
 impl PlaybackItem {
-    pub fn load(
+    pub fn save(
         &self,
         session: &SessionService,
         cdn: CdnHandle,
         cache: CacheHandle,
         config: &PlaybackConfig,
-    ) -> Result<LoadedPlaybackItem, Error> {
+        save_path: &Path,
+    ) -> Result<(), Error> {
         let path = load_media_path(self.item_id, session, &cache, config)?;
         let key = load_audio_key(&path, session, &cache)?;
         let file = MediaFile::open(path, cdn, cache)?;
-        let (source, norm_data) = file.audio_source(key)?;
-        let norm_factor = norm_data.factor_for_level(self.norm_level, config.pregain);
-        Ok(LoadedPlaybackItem {
-            file,
-            source,
-            norm_factor,
-        })
+        let mut decrypted = file.decrypted_source(key).unwrap();
+        let mut buf = [0; 8192 * 16];
+        let mut total_read = 0;
+        let mut total_write = 0;
+        let mut dump = File::create(save_path)?;
+
+        while let Ok(bytes_read) = decrypted.read(&mut buf) {
+            if bytes_read == 0 {
+                break;
+            } else {
+                log::debug!("{:x?}", buf);
+                total_write += dump.write(&buf[..bytes_read])?;
+                total_read += bytes_read;
+            }
+        }
+        println!("Total read: {}", total_read);
+        println!("Total write: {}", total_write);
+        Ok(())
     }
 
     pub fn load_track(
