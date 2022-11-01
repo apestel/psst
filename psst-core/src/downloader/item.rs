@@ -31,6 +31,30 @@ pub struct PlaybackItem {
 }
 
 impl PlaybackItem {
+    pub fn save_as_bytes(
+        &self,
+        session: &SessionService,
+        cdn: CdnHandle,
+        cache: CacheHandle,
+        config: &PlaybackConfig,
+    ) -> Vec<u8> {
+        let path = load_media_path(self.item_id, session, &cache, config).unwrap();
+        let key = load_audio_key(&path, session, &cache).unwrap();
+        let file = MediaFile::open(path, cdn, cache).unwrap();
+        let mut decrypted = file.decrypted_source(key).unwrap();
+        let mut buf = [0; 512000];
+        let mut result = Vec::<u8>::new();
+
+        while let Ok(bytes_read) = decrypted.read(&mut buf) {
+            if bytes_read == 0 {
+                break;
+            } else {
+                result.extend_from_slice(&buf[..bytes_read]);
+            }
+        }
+        result
+    }
+
     pub fn save(
         &self,
         session: &SessionService,
@@ -52,7 +76,7 @@ impl PlaybackItem {
             if bytes_read == 0 {
                 break;
             } else {
-                log::debug!("{:x?}", buf);
+                //   log::debug!("{:x?}", buf);
                 total_write += dump.write(&buf[..bytes_read])?;
                 total_read += bytes_read;
             }
