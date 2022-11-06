@@ -262,7 +262,7 @@ async fn download_track_from_spotify(
     //let album_name = track.album.unwrap().name.unwrap_or_default().to_owned();
 
     let track_saved_filename = format!("{} - {}.ogg", track_name, artist_name);
-    let track = item.save_as_bytes(&session, cdn, cache, &config);
+    let track = item.save_as_bytes(&session, cdn, cache, &config)?;
 
     // Create client.
     let client = google_cloud_storage::client::Client::default().await?;
