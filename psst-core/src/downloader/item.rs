@@ -37,11 +37,11 @@ impl PlaybackItem {
         cdn: CdnHandle,
         cache: CacheHandle,
         config: &PlaybackConfig,
-    ) -> Vec<u8> {
-        let path = load_media_path(self.item_id, session, &cache, config).unwrap();
-        let key = load_audio_key(&path, session, &cache).unwrap();
-        let file = MediaFile::open(path, cdn, cache).unwrap();
-        let mut decrypted = file.decrypted_source(key).unwrap();
+    ) -> Result<Vec<u8>, Error> {
+        let path = load_media_path(self.item_id, session, &cache, config)?;
+        let key = load_audio_key(&path, session, &cache)?;
+        let file = MediaFile::open(path, cdn, cache)?;
+        let mut decrypted = file.decrypted_source(key)?;
         let mut buf = [0; 512000];
         let mut result = Vec::<u8>::new();
 
@@ -52,7 +52,7 @@ impl PlaybackItem {
                 result.extend_from_slice(&buf[..bytes_read]);
             }
         }
-        result
+        Ok(result)
     }
 
     pub fn save(
