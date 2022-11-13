@@ -21,5 +21,5 @@ build: css
 	cargo build
 
 push:
-	docker build -t europe-west1-docker.pkg.dev/ops4ops-training-sandbox/default-docker-registry/spotify-ripper:0.0.5 .
-	docker push europe-west1-docker.pkg.dev/ops4ops-training-sandbox/default-docker-registry/spotify-ripper:0.0.5
+	docker build -t europe-west1-docker.pkg.dev/ops4ops-training-sandbox/default-docker-registry/spotify-ripper:0.0.15 .
+	docker push europe-west1-docker.pkg.dev/ops4ops-training-sandbox/default-docker-registry/spotify-ripper:0.0.15
