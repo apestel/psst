@@ -1,10 +1,19 @@
+use sqlx::{
+    postgres::{PgListener, PgPoolOptions, PgRow},
+    PgPool, Pool, Postgres, Row,
+};
+
 use axum::{
     body::Body,
+    extract::ws::{WebSocket, WebSocketUpgrade},
     http::StatusCode,
     response::{Html, IntoResponse, Redirect, Response},
-    routing::post,
+    routing::{get, post, trace},
     Extension, Json, Router,
 };
+
+use axum_extra::routing::SpaRouter;
+
 use axum_tracing_opentelemetry::opentelemetry_tracing_layer;
 use opentelemetry::{
     runtime::Tokio,
@@ -26,7 +35,7 @@ use rspotify::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, process::exit, sync::Arc};
 use tracing_subscriber::{prelude::*, Registry};
 
 use google_cloud_googleapis::pubsub::v1::PubsubMessage;
@@ -222,14 +231,14 @@ async fn download_track_from_spotify(
     tracing::debug!("PublishedMessage: {:#?}", &msg);
     if msg.message.data.is_none() {
         return Err(AppError::InternalServerError(anyhow::anyhow!(
-            "Pub/Sub message malformed"
+            "Pub/Sub message missing data"
         )));
     }
     let msg = match base64::decode(msg.message.data.unwrap()) {
         Ok(msg) => msg,
         Err(_) => {
             return Err(AppError::InternalServerError(anyhow::anyhow!(
-                "Pub/Sub message malformed - not base64"
+                "Pub/Sub message malformed - data not base64"
             )))
         }
     };
@@ -246,8 +255,8 @@ async fn download_track_from_spotify(
         proxy_url: None,
     });
 
-    let cdn = Cdn::new(session.clone(), None).unwrap();
-    let cache = Cache::new(PathBuf::from("cache")).unwrap();
+    let cdn = Cdn::new(session.clone(), None)?;
+    let cache = Cache::new(PathBuf::from("cache"))?;
     let item_id = ItemId::from_base62(track_id, ItemIdType::Track).unwrap();
 
     let item = PlaybackItem {
@@ -263,16 +272,25 @@ async fn download_track_from_spotify(
 
     let track_saved_filename = format!("{} - {}.ogg", track_name, artist_name);
     let track = item.save_as_bytes(&session, cdn, cache, &config)?;
+    tracing::info!("Download complete: {}", &track_saved_filename);
 
     // Create client.
     let client = google_cloud_storage::client::Client::default().await?;
+
+    let bucket_name = app
+        .lock()
+        .await
+        .config
+        .cloud_storage_bucket
+        .to_string()
+        .clone();
 
     // Upload the file
     match client
         .upload_object(
             &UploadObjectRequest {
-                bucket: app.lock().await.config.cloud_storage_bucket.to_string(),
-                name: track_saved_filename,
+                bucket: bucket_name.clone(),
+                name: track_saved_filename.clone(),
                 ..Default::default()
             },
             &track,
@@ -281,7 +299,40 @@ async fn download_track_from_spotify(
         )
         .await
     {
-        Ok(_) => Ok(StatusCode::OK),
+        Ok(_) => {
+            match client
+                .signed_url(
+                    &bucket_name,
+                    track_saved_filename.as_str(),
+                    SignedURLOptions::default(),
+                )
+                .await
+            {
+                Ok(url) => {
+                    info!("Download URL: {}", &url);
+                    info!("Track ID: {}", &track_id);
+
+                    match sqlx::query!(
+                        "INSERT INTO spotify_ripper (track_id, url) VALUES ($1, $2)",
+                        track_id,
+                        &url
+                    )
+                    .execute(&app.lock().await.db_pool)
+                    .await
+                    {
+                        Ok(_) => Ok(StatusCode::OK),
+                        Err(err) => {
+                            error!("SQL Insert URL: {}", err);
+                            Ok(StatusCode::OK)
+                        }
+                    }
+                }
+                Err(err) => {
+                    error!("URL Download error: {}", err);
+                    Ok(StatusCode::OK)
+                }
+            }
+        }
         Err(err) => Err(AppError::InternalServerError(anyhow::anyhow!(err))),
     }
 }
@@ -290,25 +341,97 @@ struct Track {
     id: String,
 }
 
-/// Redirect user to Cloud Storage track download link
-async fn download_track(
+async fn track_download_status_handler(
+    ws: WebSocketUpgrade,
     Extension(app): Extension<Arc<Mutex<AppState>>>,
-    Json(input): Json<Track>,
-) -> Result<Redirect, AppError> {
-    // Create client.
-    let client = google_cloud_storage::client::Client::default().await?;
+) -> Response {
+    ws.on_upgrade(|socket| track_download_status(socket, app))
+}
 
-    // Create signed url.
-    let url_for_download = client
-        .signed_url(
-            app.lock().await.config.cloud_storage_bucket.as_str(),
-            input.id.as_str(),
-            SignedURLOptions::default(),
-        )
-        .await;
-    match url_for_download {
-        Ok(url) => Ok(Redirect::to(url.as_str())),
-        Err(err) => Err(anyhow::format_err!(err.to_string()).into()),
+async fn track_download_status(mut socket: WebSocket, app: Arc<Mutex<AppState>>) {
+    // let mut listener = PgListener::connect_with(&app.lock().await.db_pool)
+    //     .await
+    //     .unwrap();
+    // listener.listen("track_download_status").await;
+    // loop {
+    //     match listener.recv().await {
+    //         Ok(notification) => {
+    //             tracing::debug!("PG Notify: {}", notification.payload());
+    //             socket
+    //                 .send(axum::extract::ws::Message::Text(
+    //                     notification.payload().to_owned(),
+    //                 ))
+    //                 .await;
+    //         } //notification.payload(),
+    //         Err(err) => tracing::debug!("PG Notify Error: {}", err),
+    //     }
+    // }
+    loop {
+        //    app.lock().await
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct TrackUrl {
+    track_id: String,
+    url: String,
+}
+
+async fn get_tracks_status(
+    Extension(app): Extension<Arc<Mutex<AppState>>>,
+    Json(input): Json<TracksList>,
+) -> Result<impl IntoResponse, AppError> {
+    let mut res: Vec<TrackUrl> = vec![];
+
+    if !input.tracks_id.is_empty() {
+        // let mut params = format!("$0");
+        // for i in 1..input.tracks_id.len() {
+        //     params.push_str(&format!(", ${}", i));
+        // }
+        // let query_str = format!(
+        //     "SELECT track_id, url FROM spotify_ripper WHERE track_id IN ( { } )",
+        //     params
+        // );
+
+        // let mut query = sqlx::query(&query_str);
+        // for i in input.tracks_id.iter() {
+        //     dbg!(&i);
+        //     query = query.bind(i);
+        // }
+
+        //dbg!("Query {:?}", query);
+
+        let mut params = format!("'{}'", input.tracks_id.first().unwrap().clone());
+
+        input
+            .tracks_id
+            .iter()
+            .skip(1)
+            .for_each(|t| params.push_str(&format!(", '{}'", t)));
+
+        let query_str = format!(
+            "SELECT track_id, url FROM spotify_ripper WHERE track_id IN ( {} )",
+            params
+        );
+
+        let mut query = sqlx::query(&query_str);
+
+        match query
+            .map(|row: PgRow| TrackUrl {
+                track_id: row.get("track_id"),
+                url: row.get("url"),
+            })
+            .fetch_all(&app.lock().await.db_pool)
+            .await
+        {
+            Ok(rows) => Ok(Json(rows)),
+            Err(err) => {
+                error!("SQL: {}", err);
+                Err(AppError::InternalServerError(anyhow::anyhow!(err)))
+            }
+        }
+    } else {
+        Ok(Json(res))
     }
 }
 
@@ -392,6 +515,7 @@ struct AppConfig {
 struct AppState {
     spotify_client: ClientCredsSpotify,
     config: AppConfig, // PostgreSQL SQLX
+    db_pool: Pool<Postgres>,
 }
 
 fn load_config_from_env() -> AppConfig {
@@ -460,24 +584,67 @@ async fn init_tracing() {
 async fn main() {
     env_logger::init();
     init_tracing().await;
+
+    //let db_pool = sqlx::Pool<sqlx::PgPool>;
+
     let creds = Credentials::from_env().unwrap();
     let spotify = ClientCredsSpotify::new(creds);
+
+    let db_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(
+            std::env::var("SUPABASE_URL")
+                .expect("DB Connection string missing")
+                .as_str(),
+        )
+        .await
+        .expect("Could not connect to DB");
+    // .expect("Could not connect to DB");
+    //     std::env::var("SUPABASE_URL")
+    //         .expect("DB Connection string missing")
+    //         .as_str(),
+    // )
+    // .await
+    // .expect("Could not connect to DB");
+
+    // let mut test_arr: Vec<String> = Vec::new();
+    // test_arr.push("Toto".to_string());
+    // test_arr.push("Titti".to_string());
+    // test_arr.push("Tutu".to_string());
+    // test_query(
+    //     TracksList {
+    //         tracks_id: test_arr,
+    //     },
+    //     &db_pool.clone(),
+    // )
+    // .await;
+
+    // exit(-1);
 
     let app_state = AppState {
         config: load_config_from_env(),
         spotify_client: spotify,
+        db_pool,
     };
 
     let app_state = Arc::new(Mutex::new(app_state));
 
+    let spa = SpaRouter::new("/assets", "dist/assets").index_file("../index.html");
+
     // build our application with a route
     let app = Router::new()
-        .route("/search_album", post(search_tracks_from_album))
-        .route("/request_tracks_download", post(request_tracks_download))
+        .route("/api/search_album", post(search_tracks_from_album))
         .route(
-            "/download_track_from_spotify",
+            "/api/request_tracks_download",
+            post(request_tracks_download),
+        )
+        .route(
+            "/api/download_track_from_spotify",
             post(download_track_from_spotify),
         )
+        .route("/api/get_tracks_status", post(get_tracks_status))
+        .route("/ws", get(track_download_status_handler))
+        .merge(spa)
         .layer(Extension(app_state))
         .layer(opentelemetry_tracing_layer());
 

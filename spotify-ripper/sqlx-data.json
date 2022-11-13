@@ -1,0 +1,16 @@
+{
+  "db": "PostgreSQL",
+  "af856787654d898d1f78479d0c6f3c6e6db8bfcf2be20fe10ffbfd7b8d48930c": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": [
+          "Text",
+          "Varchar"
+        ]
+      }
+    },
+    "query": "INSERT INTO spotify_ripper (track_id, url) VALUES ($1, $2)"
+  }
+}
