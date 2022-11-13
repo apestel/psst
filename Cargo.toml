@@ -4,6 +4,7 @@ members = [
     "psst-core",
     "psst-cli",
     "psst-gui",
+    "spotify-ripper",
 ]
 
 [profile.dev.package.symphonia]

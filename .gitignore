@@ -8,3 +8,5 @@ cache
 *.iml
 rust-toolchain
 *.ico
+.vscode
+minivorbis-sys
