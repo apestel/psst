@@ -4,8 +4,11 @@ clean:
 	rm -rf target/*
 	rm dist/output.css
 
-css:
-	npx tailwindcss -i ./static/css/input.css -o ./dist/css/output.css
+static:
+	$(MAKE) -C frontend all
+	rm -rf dist
+	mkdir -p dist
+	cp -R frontend/dist/* dist/
 
 sqlx-setup:
 	cargo install sqlx-cli
